@@ -7,6 +7,9 @@ import timm
 import tensorflow as tf
 import numpy as np
 from flask_cors import CORS
+import os
+
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
 app = Flask(__name__)
 CORS(app)
 # LOAD CLASS NAMES  #
@@ -25,7 +28,10 @@ model.load_state_dict(torch.load("sugarcane_mobilenetv3.pth", map_location=devic
 model.eval()
 
 #  LOAD SEVERITY MODEL (TensorFlow)  #
-severity_model = tf.keras.models.load_model("Custom_Severity_DeepLab_Model.h5")
+severity_model = tf.keras.models.load_model(
+    "Custom_Severity_DeepLab_Model.h5",
+    compile=False
+)
 
 #  IMAGE TRANSFORM (Disease Model) #
 transform = transforms.Compose([
@@ -122,4 +128,5 @@ def analyze():
     })
 # ---------------- RUN APP ---------------- #
 if __name__ == "__main__":
+
     app.run(host="0.0.0.0", port=10000)
