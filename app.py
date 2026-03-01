@@ -4,21 +4,25 @@ import torch.nn as nn
 from torchvision import transforms
 from PIL import Image
 import timm
+import os
+
+# 🔴 VERY IMPORTANT — must be before tensorflow import
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
+
 import tensorflow as tf
 import numpy as np
 from flask_cors import CORS
-import os
 
-os.environ["TF_USE_LEGACY_KERAS"] = "1"
 app = Flask(__name__)
 CORS(app)
-# LOAD CLASS NAMES  #
+
+# ================= LOAD CLASS NAMES =================
 with open("class_names.txt", "r") as f:
     classes = [line.strip() for line in f.readlines()]
 
 num_classes = len(classes)
 
-#  LOAD DISEASE MODEL (PyTorch) #
+# ================= LOAD DISEASE MODEL (PYTORCH) =================
 device = torch.device("cpu")
 
 model = timm.create_model('mobilenetv3_large_100', pretrained=False)
@@ -27,15 +31,15 @@ model.classifier = nn.Linear(model.classifier.in_features, num_classes)
 model.load_state_dict(torch.load("sugarcane_mobilenetv3.pth", map_location=device))
 model.eval()
 
-#  LOAD SEVERITY MODEL (TensorFlow)  #
+# ================= LOAD SEVERITY MODEL (TENSORFLOW) =================
 severity_model = tf.keras.models.load_model(
     "Custom_Severity_DeepLab_Model.h5",
     compile=False
 )
 
-#  IMAGE TRANSFORM (Disease Model) #
+# ================= IMAGE TRANSFORM =================
 transform = transforms.Compose([
-    transforms.Resize((224,224)),
+    transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
@@ -43,7 +47,7 @@ transform = transforms.Compose([
     )
 ])
 
-#  DISEASE PREDICTION FUNCTION  #
+# ================= DISEASE PREDICTION =================
 def predict_image(image):
     image = transform(image).unsqueeze(0)
 
@@ -53,13 +57,13 @@ def predict_image(image):
         confidence, predicted = torch.max(probs, 1)
 
     disease = classes[predicted.item()]
-    conf = round(confidence.item() * 100, 2)
+    confidence = round(confidence.item() * 100, 2)
 
-    return disease, conf
+    return disease, confidence
 
-#  SEVERITY PREDICTION FUNCTION#
+# ================= SEVERITY PREDICTION =================
 def predict_severity(image):
-    img = image.resize((128,128))   # 🔥 FIXED SIZE
+    img = image.resize((128, 128))
     img = np.array(img) / 255.0
     img = np.expand_dims(img, axis=0)
 
@@ -73,22 +77,18 @@ def predict_severity(image):
 
     return severity_percent
 
-
-# ROUTES  #
+# ================= ROUTES =================
 
 @app.route("/")
 def home():
-    return "Sugarcane Disease & Severity API Running"
+    return "Sugarcane Disease & Severity API Running 🚀"
 
-# Disease Prediction
 @app.route("/predict", methods=["POST"])
 def predict():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"})
 
-    file = request.files["file"]
-    image = Image.open(file).convert("RGB")
-
+    image = Image.open(request.files["file"]).convert("RGB")
     disease, confidence = predict_image(image)
 
     return jsonify({
@@ -96,28 +96,24 @@ def predict():
         "confidence": confidence
     })
 
-# 🔥 Severity Prediction
 @app.route("/severity", methods=["POST"])
 def severity():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"})
 
-    file = request.files["file"]
-    image = Image.open(file).convert("RGB")
-
+    image = Image.open(request.files["file"]).convert("RGB")
     severity_percent = predict_severity(image)
 
     return jsonify({
         "severity_percent": severity_percent
     })
+
 @app.route("/analyze", methods=["POST"])
 def analyze():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"})
 
-    file = request.files["file"]
-    image = Image.open(file).convert("RGB")
-
+    image = Image.open(request.files["file"]).convert("RGB")
     disease, confidence = predict_image(image)
     severity_percent = predict_severity(image)
 
@@ -126,7 +122,7 @@ def analyze():
         "confidence": confidence,
         "severity_percent": severity_percent
     })
-# ---------------- RUN APP ---------------- #
-if __name__ == "__main__":
 
+# ================= RUN =================
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
