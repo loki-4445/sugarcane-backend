@@ -1,125 +1,96 @@
 from flask import Flask, request, jsonify
-import torch
-import torch.nn as nn
-from torchvision import transforms
-from PIL import Image
-import timm
 import tensorflow as tf
 import numpy as np
+from PIL import Image
 from flask_cors import CORS
+
 app = Flask(__name__)
 CORS(app)
-# ---------------- LOAD CLASS NAMES ---------------- #
-with open("class_names.txt", "r") as f:
-    classes = [line.strip() for line in f.readlines()]
 
-num_classes = len(classes)
+# ── CLASS NAMES (exact order model learned) ──
+classes = [
+    'Grassy_shoot',
+    'Healthy',
+    'Mosaic',
+    'Pokkah_Boeng',
+    'Red_Rot',
+    'Rust',
+    'Sett_Rot',
+    'Yellow_Leaf',
+    'smut'
+]
 
-# ---------------- LOAD DISEASE MODEL (PyTorch) ---------------- #
-device = torch.device("cpu")
+# ── LOAD DISEASE MODEL (TensorFlow EfficientNet) ──
+disease_model = tf.keras.models.load_model('sugarcane_disease_efficientnet_92.keras')
+print("Disease model loaded!")
 
-model = timm.create_model('mobilenetv3_large_100', pretrained=False)
-model.classifier = nn.Linear(model.classifier.in_features, num_classes)
+# ── LOAD SEVERITY MODEL (unchanged) ──
+severity_model = tf.keras.models.load_model('Custom_Severity_DeepLab_Model.h5')
+print("Severity model loaded!")
 
-model.load_state_dict(torch.load("sugarcane_mobilenetv3.pth", map_location=device))
-model.eval()
-
-# ---------------- LOAD SEVERITY MODEL (TensorFlow) ---------------- #
-severity_model = tf.keras.models.load_model("Custom_Severity_DeepLab_Model.h5")
-
-# ---------------- IMAGE TRANSFORM (Disease Model) ---------------- #
-transform = transforms.Compose([
-    transforms.Resize((224,224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
-])
-
-# ---------------- DISEASE PREDICTION FUNCTION ---------------- #
+# ── DISEASE PREDICTION FUNCTION ──
 def predict_image(image):
-    image = transform(image).unsqueeze(0)
+    img = image.resize((224, 224))
+    img_array = np.array(img)
+    img_array = np.expand_dims(img_array, axis=0)  # no rescaling, EfficientNet handles it
 
-    with torch.no_grad():
-        outputs = model(image)
-        probs = torch.nn.functional.softmax(outputs, dim=1)
-        confidence, predicted = torch.max(probs, 1)
+    preds = disease_model.predict(img_array, verbose=0)
+    pred_idx = np.argmax(preds[0])
+    confidence = round(float(np.max(preds[0])) * 100, 2)
+    disease = classes[pred_idx]
 
-    disease = classes[predicted.item()]
-    conf = round(confidence.item() * 100, 2)
+    return disease, confidence
 
-    return disease, conf
-
-# ---------------- SEVERITY PREDICTION FUNCTION ---------------- #
+# ── SEVERITY PREDICTION FUNCTION (unchanged) ──
 def predict_severity(image):
-    img = image.resize((128,128))   # 🔥 FIXED SIZE
+    img = image.resize((128, 128))
     img = np.array(img) / 255.0
     img = np.expand_dims(img, axis=0)
 
-    pred_mask = severity_model.predict(img)[0]
+    pred_mask = severity_model.predict(img, verbose=0)[0]
 
     diseased_pixels = np.sum(pred_mask > 0.5)
     total_pixels = pred_mask.size
-
-    severity_percent = (diseased_pixels / total_pixels) * 100
-    severity_percent = round(severity_percent, 2)
+    severity_percent = round((diseased_pixels / total_pixels) * 100, 2)
 
     return severity_percent
 
-
-# ---------------- ROUTES ---------------- #
-
+# ── ROUTES ──
 @app.route("/")
 def home():
     return "Sugarcane Disease & Severity API Running"
 
-# 🌿 Disease Prediction
 @app.route("/predict", methods=["POST"])
 def predict():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"})
-
     file = request.files["file"]
     image = Image.open(file).convert("RGB")
-
     disease, confidence = predict_image(image)
+    return jsonify({"disease": disease, "confidence": confidence})
 
-    return jsonify({
-        "disease": disease,
-        "confidence": confidence
-    })
-
-# 🔥 Severity Prediction
 @app.route("/severity", methods=["POST"])
 def severity():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"})
-
     file = request.files["file"]
     image = Image.open(file).convert("RGB")
-
     severity_percent = predict_severity(image)
+    return jsonify({"severity_percent": severity_percent})
 
-    return jsonify({
-        "severity_percent": severity_percent
-    })
 @app.route("/analyze", methods=["POST"])
 def analyze():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"})
-
     file = request.files["file"]
     image = Image.open(file).convert("RGB")
-
     disease, confidence = predict_image(image)
     severity_percent = predict_severity(image)
-
     return jsonify({
         "disease": disease,
         "confidence": confidence,
         "severity_percent": severity_percent
     })
-# ---------------- RUN APP ---------------- #
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
